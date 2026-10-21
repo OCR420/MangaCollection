@@ -1,24 +1,72 @@
-import React, { useState } from "react";
+
+import { router } from "expo-router";
+import { useState } from "react";
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
+  View,
 } from "react-native";
-import { router } from "expo-router";
+import { api } from "../data/api";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [cargando, setCargando] = useState(false);
 
-  const iniciarSesion = () => {
-    router.replace("/home");
+  const iniciarSesion = async () => {
+    const correo = email.trim().toLowerCase();
+
+    if (!correo || !password) {
+      Alert.alert(
+        "Campos obligatorios",
+        "Ingresa tu correo y contraseña."
+      );
+      return;
+    }
+
+    try {
+      setCargando(true);
+
+      const respuesta = await api.post("/usuarios/login", {
+        email: correo,
+        password: password,
+      });
+
+      // El backend confirmó que las credenciales son correctas.
+      // Por ahora navegamos a la pantalla principal.
+      console.log("Sesión iniciada:", respuesta.data.usuario.email);
+
+      router.replace("/home");
+
+    } catch (error: any) {
+      console.log("ERROR AL INICIAR SESIÓN");
+      console.log("Mensaje:", error.message);
+      console.log("Código HTTP:", error.response?.status);
+      console.log("Respuesta del servidor:", error.response?.data);
+
+      if (error.response) {
+        Alert.alert(
+          `Error HTTP ${error.response.status}`,
+          error.response.data?.error ||
+          JSON.stringify(error.response.data)
+        );
+      } else {
+        Alert.alert(
+          "Error de conexión",
+          `No se recibió respuesta del servidor: ${error.message}`
+        );
+      }
+    } finally {
+      setCargando(false);
+    }
   };
 
   return (
     <View style={styles.container}>
-
       <Text style={styles.logo}>MANGA</Text>
       <Text style={styles.logoSub}>COLLECTION</Text>
 
@@ -31,6 +79,8 @@ export default function LoginScreen() {
         onChangeText={setEmail}
         keyboardType="email-address"
         autoCapitalize="none"
+        autoCorrect={false}
+        editable={!cargando}
       />
 
       <TextInput
@@ -39,25 +89,32 @@ export default function LoginScreen() {
         value={password}
         onChangeText={setPassword}
         secureTextEntry
+        autoCapitalize="none"
+        editable={!cargando}
       />
 
       <TouchableOpacity
         style={styles.button}
         onPress={iniciarSesion}
+        disabled={cargando}
       >
-        <Text style={styles.buttonText}>
-          INICIAR SESIÓN
-        </Text>
+        {cargando ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.buttonText}>
+            INICIAR SESIÓN
+          </Text>
+        )}
       </TouchableOpacity>
 
       <TouchableOpacity
         onPress={() => router.push("/register")}
+        disabled={cargando}
       >
         <Text style={styles.register}>
           ¿No tienes una cuenta? Registrarse
         </Text>
       </TouchableOpacity>
-
     </View>
   );
 }
