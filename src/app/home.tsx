@@ -1,393 +1,510 @@
-import React from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  Image,
   ScrollView,
-  TouchableOpacity,
+  StyleSheet,
+  Text,
   TextInput,
+  TouchableOpacity,
+  View
 } from "react-native";
-import { router } from "expo-router";
+import BottomNav from "../components/BottomNav";
+import { api } from "../data/api";
 
-const mangas = [
-  {
-    id: 1,
-    titulo: "One Piece",
-    poseidos: 20,
-    total: 115,
-    porcentaje: 17,
-  },
-  {
-    id: 2,
-    titulo: "Inuyasha",
-    poseidos: 56,
-    total: 56,
-    porcentaje: 100,
-  },
-  {
-    id: 3,
-    titulo: "Berserk",
-    poseidos: 15,
-    total: 42,
-    porcentaje: 36,
-  },
-  {
-    id: 4,
-    titulo: "Chainsaw Man",
-    poseidos: 8,
-    total: 19,
-    porcentaje: 42,
-  },
-];
+
+type Manga = {
+  _id: string;
+  mal_id?: number;
+  titulo: string;
+  total_tomos: number;
+  imagen_url?: string;
+};
+
+type Volumen = {
+  _id: string;
+  manga_id: Manga | string;
+  numero_tomo: number;
+  estado: "poseido" | "deseado";
+};
 
 export default function HomeScreen() {
+  const [mangas, setMangas] = useState<any[]>([]);
+  const [busqueda, setBusqueda] = useState("");
+  const [cargando, setCargando] = useState(true);
+  const [actualizando, setActualizando] = useState(false);
+
+  const cargarColeccion = useCallback(async () => {
+    try {
+      setActualizando(true);
+
+      const usuarioTexto = await AsyncStorage.getItem("usuario");
+
+      if (!usuarioTexto) {
+        setMangas([]);
+        router.replace("/");
+        return;
+      }
+
+      const usuario = JSON.parse(usuarioTexto);
+      const respuesta = await api.get(
+        `/usuarios/${usuario._id}/volumenes`
+      );
+
+      const volumenes: Volumen[] = respuesta.data;
+      const grupos: Record<string, any> = {};
+
+      volumenes
+        .filter((volumen) => volumen.estado === "poseido")
+        .forEach((volumen) => {
+          const manga = volumen.manga_id;
+
+          if (!manga || typeof manga === "string") return;
+
+          if (!grupos[manga._id]) {
+            grupos[manga._id] = {
+              ...manga,
+              volumenesPoseidos: [],
+              poseidos: 0,
+              porcentaje: null,
+            };
+          }
+
+          grupos[manga._id].volumenesPoseidos.push({
+            _id: volumen._id,
+            numero_tomo: Number(volumen.numero_tomo),
+          });
+        });
+
+      const resultado = Object.values(grupos).map((manga: any) => {
+        const tomosUnicos = [
+          ...new Set(
+            manga.volumenesPoseidos.map((tomo: any) => tomo.numero_tomo)
+          ),
+        ];
+
+        const total = Number(manga.total_tomos);
+
+        // Solo calculamos el porcentaje si existe un total válido.
+        const totalValido =
+          manga.total_tomos !== null &&
+          manga.total_tomos !== undefined &&
+          manga.total_tomos !== "" &&
+          Number.isFinite(total) &&
+          total > 0;
+
+        const porcentaje = totalValido
+          ? Math.min(100, Math.round((tomosUnicos.length / total) * 100))
+          : null;
+
+        return {
+          ...manga,
+          volumenesPoseidos: manga.volumenesPoseidos.sort(
+            (a: any, b: any) => a.numero_tomo - b.numero_tomo
+          ),
+          poseidos: tomosUnicos.length,
+          total_tomos: totalValido ? total : null,
+          porcentaje,
+        };
+      });
+
+      setMangas(resultado);
+    } catch (error: any) {
+      console.error(
+        "Error al cargar la colección:",
+        error.response?.data || error.message
+      );
+      Alert.alert("Error", "No se pudo cargar tu colección.");
+    } finally {
+      setCargando(false);
+      setActualizando(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      cargarColeccion();
+    }, [cargarColeccion])
+  );
+
+  const mangasFiltrados = mangas.filter((manga) =>
+    manga.titulo?.toLowerCase().includes(busqueda.toLowerCase())
+  );
+
+  function abrirManga(manga: any) {
+    if (manga.mal_id) {
+      router.push(`/manga/${manga.mal_id}`);
+    } else {
+      Alert.alert(
+        "Ficha no disponible",
+        "Este manga no tiene un identificador externo. Puedes buscarlo en la sección Buscar."
+      );
+    }
+  }
+
+  async function eliminarTomo(manga: any, tomo: any) {
+    Alert.alert(
+      "Eliminar tomo",
+      `¿Quieres eliminar el tomo ${tomo.numero_tomo} de ${manga.titulo}?`,
+      [
+        {
+          text: "Cancelar",
+          style: "cancel",
+        },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await api.delete(`/volumenes/${tomo._id}`);
+
+              Alert.alert(
+                "Listo",
+                `El tomo ${tomo.numero_tomo} fue eliminado de tu colección.`
+              );
+
+              await cargarColeccion();
+            } catch (error: any) {
+              console.error(
+                "Error al eliminar tomo:",
+                error.response?.data || error.message
+              );
+
+              Alert.alert(
+                "Error",
+                "No se pudo eliminar el tomo. Inténtalo nuevamente."
+              );
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function eliminarManga(manga: any) {
+    Alert.alert(
+      "Eliminar manga",
+      `¿Quieres quitar "${manga.titulo}" de tu colección? Se eliminarán todos los tomos que tienes registrados de este manga.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const usuarioTexto = await AsyncStorage.getItem("usuario");
+
+              if (!usuarioTexto) {
+                router.replace("/");
+                return;
+              }
+
+              const usuario = JSON.parse(usuarioTexto);
+
+              await api.delete(
+                `/usuarios/${usuario._id}/mangas/${manga._id}`,
+                { params: { estado: "poseido" } }
+              );
+
+              setMangas((actuales) =>
+                actuales.filter((item) => item._id !== manga._id)
+              );
+
+              Alert.alert("Listo", "El manga fue eliminado de tu colección.");
+            } catch (error: any) {
+              console.error(
+                "Error al eliminar manga:",
+                error.response?.data || error.message
+              );
+              Alert.alert("Error", "No se pudo eliminar el manga.");
+            }
+          }
+        }
+      ]
+    );
+  }
+
   return (
-    <View style={styles.container}>
-
+    <View style={styles.pantalla}>
       <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        style={styles.contenedor}
+        contentContainerStyle={styles.contenido}
       >
-
-        {/* ENCABEZADO */}
-
-        <View style={styles.header}>
-
-          <TouchableOpacity
-            onPress={() => router.back()}
-          >
-            <Text style={styles.back}>‹</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.headerTitle}>
-            MANGA COLLECTION
-          </Text>
-
-          <View style={styles.logo}>
-            <Text style={styles.logoText}>M</Text>
-          </View>
-
-        </View>
-
-        <Text style={styles.subtitle}>
-          MI COLECCIÓN
+        <Text style={styles.marca}>MANGA COLLECTION</Text>
+        <Text style={styles.titulo}>MI COLECCIÓN</Text>
+        <Text style={styles.descripcion}>
+          Consulta los mangas y los tomos que tienes registrados.
         </Text>
 
-        {/* BUSCADOR */}
+        <TextInput
+          style={styles.busqueda}
+          placeholder="Busca tus mangas..."
+          value={busqueda}
+          onChangeText={setBusqueda}
+        />
 
-        <View style={styles.searchContainer}>
-
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Busca tus mangas..."
-            placeholderTextColor="#777"
-          />
-
-          <Text style={styles.searchIcon}>
-            ⌕
+        <TouchableOpacity
+          style={styles.botonActualizar}
+          onPress={cargarColeccion}
+          disabled={actualizando}
+        >
+          <Text style={styles.textoActualizar}>
+            {actualizando ? "Actualizando..." : "Actualizar colección"}
           </Text>
+        </TouchableOpacity>
 
-        </View>
-
-        {/* GRID */}
-
-        <View style={styles.grid}>
-
-          {mangas.map((manga) => (
-
-            <TouchableOpacity
-              key={manga.id}
-              style={styles.card}
-              onPress={() =>
-                router.push(`/manga/${manga.id}`)
-              }
-            >
-
-              {/* PORTADA */}
-
-              <View style={styles.cover}>
-                <Text style={styles.coverTitle}>
-                  {manga.titulo}
-                </Text>
-              </View>
-
-              {/* INFORMACIÓN */}
-
-              <Text
-                style={styles.mangaTitle}
-                numberOfLines={1}
+        {cargando ? (
+          <ActivityIndicator size="large" color="#111" style={styles.carga} />
+        ) : mangasFiltrados.length === 0 ? (
+          <View style={styles.vacio}>
+            <Text style={styles.vacioTitulo}>
+              {busqueda ? "No hay resultados" : "Tu colección está vacía"}
+            </Text>
+            <Text style={styles.vacioTexto}>
+              {busqueda
+                ? "Prueba con otro título."
+                : "Busca un manga y agrega los tomos que ya tienes."}
+            </Text>
+            {!busqueda && (
+              <TouchableOpacity
+                style={styles.boton}
+                onPress={() => router.push("/search")}
               >
-                {manga.titulo}
-              </Text>
+                <Text style={styles.textoBoton}>Buscar mangas</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.grid}>
 
-              <Text style={styles.volumeText}>
-                {manga.poseidos} / {manga.total}
-              </Text>
+            {mangasFiltrados.map((manga) => (
+              <View key={manga._id} style={styles.tarjeta}>
+                <TouchableOpacity onPress={() => abrirManga(manga)}>
 
-              {/* PROGRESO */}
+                  <View style={styles.portada}>
+                    {manga.imagen_url ? (
+                      <Image
+                        source={{ uri: manga.imagen_url }}
+                        style={styles.imagenPortada}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Text style={styles.portadaTexto} numberOfLines={3}>
+                        {manga.titulo}
+                      </Text>
+                    )}
+                  </View>
 
-              <View style={styles.progressBackground}>
-                <View
-                  style={[
-                    styles.progress,
-                    {
-                      width: `${manga.porcentaje}%`,
-                    },
-                  ]}
-                />
+
+                  <Text style={styles.nombreManga} numberOfLines={2}>
+                    {manga.titulo}
+                  </Text>
+
+                  <Text style={styles.progresoTexto}>
+                    {manga.total_tomos
+                      ? `${manga.poseidos} de ${manga.total_tomos} tomos`
+                      : `${manga.poseidos} tomos registrados`}
+                  </Text>
+
+                  {manga.total_tomos ? (
+                    <>
+                      <View style={styles.barraFondo}>
+                        <View
+                          style={[
+                            styles.barraProgreso,
+                            { width: `${manga.porcentaje}%` },
+                          ]}
+                        />
+                      </View>
+
+                      <Text style={styles.porcentaje}>
+                        {manga.porcentaje}% completado
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.sinTotal}>
+                      Cantidad total de tomos no disponible
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <View style={styles.seccionTomos}>
+                  <Text style={styles.tituloTomos}>
+                    TOMOS REGISTRADOS
+                  </Text>
+
+                  <View style={styles.listaTomos}>
+                    {manga.volumenesPoseidos.map((tomo: any) => (
+                      <TouchableOpacity
+                        key={tomo._id}
+                        style={styles.tomoItem}
+                        onPress={() => eliminarTomo(manga, tomo)}
+                      >
+                        <Text style={styles.tomoNumero}>
+                          {tomo.numero_tomo}
+                        </Text>
+
+                        <Text style={styles.tomoEliminar}>
+                          ×
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.ayudaTomos}>
+                    Pulsa un tomo para eliminarlo
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.eliminarManga}
+                  onPress={() => eliminarManga(manga)}
+                >
+                  <Text style={styles.eliminarMangaTexto}>
+                    Eliminar manga
+                  </Text>
+                </TouchableOpacity>
               </View>
-
-              <Text style={styles.percentage}>
-                {manga.porcentaje}%
-              </Text>
-
-            </TouchableOpacity>
-
-          ))}
-
-        </View>
-
+            ))}
+          </View>
+        )}
       </ScrollView>
-
-      {/* NAVBAR */}
-
-      <View style={styles.bottomNav}>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/search")}
-        >
-          <Text style={styles.navIcon}>⌂</Text>
-          <Text style={styles.navText}>
-            HOME
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-        >
-          <Text style={styles.navIconActive}>
-            ▮
-          </Text>
-
-          <Text style={styles.navTextActive}>
-            COLLECTION
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/wishlist")}
-        >
-          <Text style={styles.navIcon}>
-            ♡
-          </Text>
-
-          <Text style={styles.navText}>
-            WISHLIST
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/profile")}
-        >
-          <Text style={styles.navIcon}>
-            ♙
-          </Text>
-
-          <Text style={styles.navText}>
-            PERFIL
-          </Text>
-        </TouchableOpacity>
-
-      </View>
-
+      <BottomNav active="collection" />
     </View>
+
   );
 }
 
 const styles = StyleSheet.create({
-
-  container: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
-
-  content: {
-    paddingBottom: 90,
-  },
-
-  header: {
-    height: 75,
-    paddingHorizontal: 20,
-    paddingTop: 35,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  back: {
-    fontSize: 28,
-    color: "#111111",
-  },
-
-  headerTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#111111",
-  },
-
-  logo: {
-    width: 34,
-    height: 34,
-    backgroundColor: "#111111",
-    borderRadius: 7,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  logoText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-
-  subtitle: {
-    textAlign: "center",
-    fontSize: 12,
-    marginTop: 12,
-    marginBottom: 14,
-    color: "#333333",
-  },
-
-  searchContainer: {
-    height: 38,
-    marginHorizontal: 20,
+  pantalla: { flex: 1, backgroundColor: "#fff" },
+  contenedor: { flex: 1 },
+  contenido: { padding: 20, paddingBottom: 30 },
+  marca: { fontSize: 12, fontWeight: "bold", letterSpacing: 2, color: "#555" },
+  titulo: { fontSize: 27, fontWeight: "bold", marginTop: 15, color: "#111" },
+  descripcion: { color: "#666", marginTop: 7, marginBottom: 20 },
+  busqueda: {
     borderWidth: 1,
-    borderColor: "#999999",
-    flexDirection: "row",
-    alignItems: "center",
+    borderColor: "#ddd",
+    borderRadius: 8,
+    padding: 12,
+    color: "#111"
   },
-
-  searchInput: {
-    flex: 1,
-    height: "100%",
-    paddingHorizontal: 10,
-    fontSize: 12,
-    color: "#111111",
-  },
-
-  searchIcon: {
-    fontSize: 18,
-    paddingRight: 10,
-    color: "#222222",
-  },
-
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    marginTop: 20,
-  },
-
-  card: {
+  botonActualizar: { alignSelf: "flex-end", paddingVertical: 12 },
+  textoActualizar: { fontSize: 13, color: "#444" },
+  carga: { marginTop: 40 },
+  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  tarjeta: {
     width: "48%",
     borderWidth: 1,
-    borderColor: "#AAAAAA",
-    borderRadius: 7,
-    padding: 8,
-    marginBottom: 12,
-    backgroundColor: "#FFFFFF",
+    borderColor: "#e5e5e5",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 14
   },
 
-  cover: {
-    height: 125,
-    backgroundColor: "#E5E5E5",
+
+  eliminarManga: {
+    backgroundColor: "#f5eaea",
+    padding: 9,
+    borderRadius: 6,
+    marginTop: 12,
+    alignItems: "center"
+  },
+  eliminarMangaTexto: {
+    color: "#b42318",
+    fontSize: 12,
+    fontWeight: "bold"
+  },
+
+  portada: {
+    height: 190,
+    backgroundColor: "#eee",
+    alignItems: "center",
+    justifyContent: "center",
     borderRadius: 5,
-    alignItems: "center",
-    justifyContent: "center",
+    overflow: "hidden"
   },
-
-  coverTitle: {
-    fontSize: 15,
-    fontWeight: "900",
+  imagenPortada: {
+    width: "100%",
+    height: "100%"
+  },
+  portadaTexto: {
+    color: "#444",
+    fontWeight: "bold",
     textAlign: "center",
-    color: "#333333",
+    padding: 10
   },
 
-  mangaTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    marginTop: 7,
-    color: "#111111",
-  },
-
-  volumeText: {
+  sinTotal: {
     fontSize: 10,
-    color: "#555555",
-    marginTop: 3,
-  },
-
-  progressBackground: {
-    height: 4,
-    backgroundColor: "#D9D9D9",
+    color: "#999",
     marginTop: 7,
-    overflow: "hidden",
   },
 
-  progress: {
-    height: 4,
-    backgroundColor: "#315EB7",
-  },
-
-  percentage: {
-    fontSize: 10,
-    color: "#555555",
-    marginTop: 3,
-  },
-
-  bottomNav: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 68,
-    backgroundColor: "#FFFFFF",
+  seccionTomos: {
+    marginTop: 14,
+    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#EEEEEE",
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
+    borderTopColor: "#eeeeee",
   },
 
-  navItem: {
+  tituloTomos: {
+    fontSize: 10,
+    fontWeight: "bold",
+    color: "#555",
+    marginBottom: 9,
+    letterSpacing: 0.5,
+  },
+
+  listaTomos: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+
+  tomoItem: {
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "#eeeeee",
+    borderRadius: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+    minWidth: 43,
   },
 
-  navIcon: {
-    fontSize: 17,
-    color: "#AAAAAA",
+  tomoNumero: {
+    fontSize: 11,
+    fontWeight: "bold",
+    color: "#222",
   },
 
-  navIconActive: {
-    fontSize: 17,
-    color: "#222222",
+  tomoEliminar: {
+    color: "#b42318",
+    fontSize: 14,
+    fontWeight: "bold",
+    marginLeft: 5,
   },
 
-  navText: {
-    fontSize: 8,
-    color: "#999999",
-    marginTop: 3,
+  ayudaTomos: {
+    fontSize: 9,
+    color: "#999",
+    marginTop: 7,
   },
 
-  navTextActive: {
-    fontSize: 8,
-    color: "#222222",
-    fontWeight: "700",
-    marginTop: 3,
-  },
+
+
+  nombreManga: { fontSize: 15, fontWeight: "bold", marginTop: 10, color: "#111" },
+  progresoTexto: { fontSize: 12, color: "#555", marginTop: 6 },
+  barraFondo: { height: 6, backgroundColor: "#e5e5e5", borderRadius: 5, marginTop: 8 },
+  barraProgreso: { height: 6, backgroundColor: "#111", borderRadius: 5 },
+  porcentaje: { fontSize: 11, color: "#555", marginTop: 5 },
+  vacio: { alignItems: "center", paddingVertical: 45 },
+  vacioTitulo: { fontSize: 18, fontWeight: "bold", color: "#111" },
+  vacioTexto: { color: "#666", textAlign: "center", marginTop: 10, lineHeight: 21 },
+  boton: { backgroundColor: "#111", padding: 13, borderRadius: 8, marginTop: 18 },
+  textoBoton: { color: "#fff", fontWeight: "bold" },
+
 
 });

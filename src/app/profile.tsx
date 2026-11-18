@@ -1,213 +1,249 @@
-import React from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-} from "react-native";
+
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import BottomNav from "../components/BottomNav";
+import { api } from "../data/api";
+
+type Usuario = {
+  _id?: string;
+  id?: string;
+  nombre?: string;
+  email?: string;
+};
+
+type Volumen = {
+  _id?: string;
+  manga_id?: string | { _id?: string };
+  numero_tomo?: number;
+  estado?: "poseido" | "deseado";
+};
 
 export default function ProfileScreen() {
+  const [usuario, setUsuario] = useState<Usuario | null>(null);
+  const [mangas, setMangas] = useState(0);
+  const [tomos, setTomos] = useState(0);
+  const [progreso, setProgreso] = useState(0);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    cargarPerfil();
+  }, []);
+
+  const cargarPerfil = async () => {
+    try {
+      setCargando(true);
+      setError("");
+
+      // Recuperar el usuario guardado al iniciar sesión
+      const usuarioGuardado = await AsyncStorage.getItem("usuario");
+
+      if (!usuarioGuardado) {
+        setError("No hay una sesión guardada. Inicia sesión nuevamente.");
+        return;
+      }
+
+      const usuarioActual: Usuario = JSON.parse(usuarioGuardado);
+      const usuarioId = usuarioActual._id || usuarioActual.id;
+
+      if (!usuarioId) {
+        setError("No se encontró el identificador del usuario.");
+        return;
+      }
+
+      setUsuario(usuarioActual);
+
+      // Consultar los volúmenes de este usuario en el backend
+      const respuesta = await api.get(
+        `/usuarios/${usuarioId}/volumenes`
+      );
+
+      const volumenes: Volumen[] = Array.isArray(respuesta.data)
+        ? respuesta.data
+        : Array.isArray(respuesta.data.volumenes)
+          ? respuesta.data.volumenes
+          : [];
+
+      // Contar los mangas distintos registrados por el usuario
+      const idsMangas = new Set(
+        volumenes
+          .map((volumen) => {
+            if (typeof volumen.manga_id === "string") {
+              return volumen.manga_id;
+            }
+
+            return volumen.manga_id?._id;
+          })
+          .filter(Boolean)
+      );
+
+      // Contar los tomos que el usuario posee
+      const tomosPoseidos = volumenes.filter(
+        (volumen) => volumen.estado === "poseido"
+      ).length;
+
+      // Calcular el porcentaje de tomos poseídos
+      // respecto a los volúmenes registrados como poseídos o deseados
+      const totalRegistrados = volumenes.length;
+
+      const porcentaje =
+        totalRegistrados > 0
+          ? Math.round((tomosPoseidos / totalRegistrados) * 100)
+          : 0;
+
+      setMangas(idsMangas.size);
+      setTomos(tomosPoseidos);
+      setProgreso(porcentaje);
+    } catch (err: any) {
+      console.error("Error al cargar el perfil:", err);
+
+      setError(
+        err.response?.data?.mensaje ||
+        "No se pudo cargar el perfil. Comprueba la conexión con el servidor."
+      );
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  const cerrarSesion = async () => {
+    try {
+      await AsyncStorage.removeItem("usuario");
+      router.replace("/");
+    } catch {
+      Alert.alert(
+        "Error",
+        "No se pudo cerrar la sesión correctamente."
+      );
+    }
+  };
+
+  const nombre = usuario?.nombre || "Usuario";
+  const inicial = nombre.charAt(0).toUpperCase() || "U";
 
   return (
     <View style={styles.container}>
-
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
-
         {/* HEADER */}
-
         <View style={styles.header}>
-
-          <TouchableOpacity
-            onPress={() => router.back()}
-          >
+          <TouchableOpacity onPress={() => router.back()}>
             <Text style={styles.back}>‹</Text>
           </TouchableOpacity>
 
-          <Text style={styles.headerTitle}>
-            PERFIL
-          </Text>
+          <Text style={styles.headerTitle}>PERFIL</Text>
 
           <View style={styles.logo}>
             <Text style={styles.logoText}>M</Text>
           </View>
-
         </View>
 
-        {/* AVATAR */}
-
-        <View style={styles.avatarContainer}>
-
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              A
+        {cargando ? (
+          <View style={styles.statusContainer}>
+            <ActivityIndicator size="large" color="#111111" />
+            <Text style={styles.statusText}>
+              Cargando perfil...
             </Text>
           </View>
+        ) : error ? (
+          <View style={styles.statusContainer}>
+            <Text style={styles.errorText}>{error}</Text>
 
-        </View>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={cargarPerfil}
+            >
+              <Text style={styles.retryText}>Intentar de nuevo</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {/* AVATAR */}
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{inicial}</Text>
+              </View>
+            </View>
 
-        {/* NOMBRE */}
+            {/* NOMBRE */}
+            <View style={styles.nameRow}>
+              <Text style={styles.name}>{nombre}</Text>
+            </View>
 
-        <View style={styles.nameRow}>
+            {/* EMAIL */}
+            <View style={styles.emailBox}>
+              <Text style={styles.email}>
+                {usuario?.email || "Correo no disponible"}
+              </Text>
+            </View>
 
-          <Text style={styles.name}>
-            Andres
-          </Text>
+            {/* DETALLES */}
+            <Text style={styles.sectionTitle}>Detalles</Text>
 
-          <Text style={styles.viewAll}>
-            View all
-          </Text>
+            {/* MANGAS */}
+            <View style={styles.detailCard}>
+              <Text style={styles.detailIcon}>▣</Text>
+              <Text style={styles.detailLabel}>Mangas:</Text>
+              <Text style={styles.detailValue}>{mangas}</Text>
+            </View>
 
-        </View>
+            {/* TOMOS */}
+            <View style={styles.detailCard}>
+              <Text style={styles.detailIcon}>▪</Text>
+              <Text style={styles.detailLabel}>Tomos poseídos:</Text>
+              <Text style={styles.detailValue}>{tomos}</Text>
+            </View>
 
-        {/* EMAIL */}
+            {/* PROGRESO */}
+            <View style={styles.detailCard}>
+              <Text style={styles.detailIcon}>☆</Text>
+              <Text style={styles.detailLabel}>
+                Progreso registrado:
+              </Text>
+              <Text style={styles.detailValue}>{progreso}%</Text>
+            </View>
 
-        <View style={styles.emailBox}>
-          <Text style={styles.email}>
-            andres123@gmail.com
-          </Text>
-        </View>
-
-        {/* DETALLES */}
-
-        <Text style={styles.sectionTitle}>
-          Detalles
-        </Text>
-
-        {/* MANGAS */}
-
-        <View style={styles.detailCard}>
-
-          <Text style={styles.detailIcon}>
-            ▣
-          </Text>
-
-          <Text style={styles.detailLabel}>
-            Mangas:
-          </Text>
-
-          <Text style={styles.detailValue}>
-            15
-          </Text>
-
-        </View>
-
-        {/* TOMOS */}
-
-        <View style={styles.detailCard}>
-
-          <Text style={styles.detailIcon}>
-            ▪
-          </Text>
-
-          <Text style={styles.detailLabel}>
-            Tomos:
-          </Text>
-
-          <Text style={styles.detailValue}>
-            120
-          </Text>
-
-        </View>
-
-        {/* PROGRESO */}
-
-        <View style={styles.detailCard}>
-
-          <Text style={styles.detailIcon}>
-            ☆
-          </Text>
-
-          <Text style={styles.detailLabel}>
-            Progreso general:
-          </Text>
-
-          <Text style={styles.detailValue}>
-            65%
-          </Text>
-
-        </View>
-
-        {/* CERRAR SESIÓN */}
-
-        <TouchableOpacity
-          style={styles.logout}
-          onPress={() => router.replace("/")}
-        >
-          <Text style={styles.logoutText}>
-            Cerrar sesión
-          </Text>
-        </TouchableOpacity>
-
+            <Text style={styles.note}>
+              El progreso compara los tomos poseídos con los tomos
+              registrados como poseídos o deseados.
+            </Text>
+            <TouchableOpacity
+              style={styles.tutorialButton}
+              onPress={() => router.push("/tutorial?manual=1")}
+            >
+              <Text style={styles.tutorialButtonText}>
+                Ver tutorial nuevamente
+              </Text>
+            </TouchableOpacity>
+            {/* CERRAR SESIÓN */}
+            <TouchableOpacity
+              style={styles.logout}
+              onPress={cerrarSesion}
+            >
+              <Text style={styles.logoutText}>Cerrar sesión</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
 
-      {/* NAVBAR */}
-
-      <View style={styles.bottomNav}>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/search")}
-        >
-          <Text style={styles.navIcon}>
-            ⌂
-          </Text>
-
-          <Text style={styles.navText}>
-            HOME
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/home")}
-        >
-          <Text style={styles.navIcon}>
-            ▮
-          </Text>
-
-          <Text style={styles.navText}>
-            COLLECTION
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/wishlist")}
-        >
-          <Text style={styles.navIcon}>
-            ♡
-          </Text>
-
-          <Text style={styles.navText}>
-            WISHLIST
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-        >
-          <Text style={styles.navIconActive}>
-            ♙
-          </Text>
-
-          <Text style={styles.navActive}>
-            PERFIL
-          </Text>
-        </TouchableOpacity>
-
-      </View>
-
+      <BottomNav active="profile" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
@@ -289,13 +325,8 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  viewAll: {
-    fontSize: 9,
-    color: "#666666",
-  },
-
   emailBox: {
-    height: 38,
+    minHeight: 38,
     marginHorizontal: 20,
     marginTop: 12,
     borderWidth: 1,
@@ -319,7 +350,7 @@ const styles = StyleSheet.create({
   },
 
   detailCard: {
-    height: 58,
+    minHeight: 58,
     marginHorizontal: 20,
     borderWidth: 1,
     borderColor: "#AAAAAA",
@@ -347,6 +378,48 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
+  note: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    fontSize: 10,
+    color: "#666666",
+    lineHeight: 15,
+  },
+
+  statusContainer: {
+    paddingHorizontal: 25,
+    paddingVertical: 45,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  statusText: {
+    marginTop: 12,
+    fontSize: 13,
+    color: "#555555",
+  },
+
+  errorText: {
+    fontSize: 13,
+    color: "#B00020",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  retryButton: {
+    marginTop: 15,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: "#111111",
+    borderRadius: 5,
+  },
+
+  retryText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
   logout: {
     marginHorizontal: 20,
     marginTop: 8,
@@ -363,45 +436,21 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  bottomNav: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 68,
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderTopColor: "#EEEEEE",
-    flexDirection: "row",
-    justifyContent: "space-around",
+  tutorialButton: {
+    marginHorizontal: 20,
+    marginTop: 15,
+    height: 42,
+    borderWidth: 1,
+    borderColor: "#111111",
+    borderRadius: 5,
     alignItems: "center",
+    justifyContent: "center",
   },
 
-  navItem: {
-    alignItems: "center",
-  },
-
-  navIcon: {
-    fontSize: 17,
-    color: "#AAAAAA",
-  },
-
-  navIconActive: {
-    fontSize: 17,
+  tutorialButtonText: {
     color: "#111111",
-  },
-
-  navText: {
-    fontSize: 8,
-    color: "#999999",
-    marginTop: 3,
-  },
-
-  navActive: {
-    fontSize: 8,
-    color: "#111111",
+    fontSize: 12,
     fontWeight: "700",
-    marginTop: 3,
   },
 
 });

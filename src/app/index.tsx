@@ -1,4 +1,5 @@
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
@@ -12,10 +13,12 @@ import {
 } from "react-native";
 import { api } from "../data/api";
 
+
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [cargando, setCargando] = useState(false);
+  const [mostrarPassword, setMostrarPassword] = useState(false);
 
   const iniciarSesion = async () => {
     const correo = email.trim().toLowerCase();
@@ -36,11 +39,29 @@ export default function LoginScreen() {
         password: password,
       });
 
-      // El backend confirmó que las credenciales son correctas.
-      // Por ahora navegamos a la pantalla principal.
-      console.log("Sesión iniciada:", respuesta.data.usuario.email);
+      const usuario = respuesta.data.usuario;
 
-      router.replace("/home");
+      // Guardar los datos del usuario
+      await AsyncStorage.setItem(
+        "usuario",
+        JSON.stringify(usuario)
+      );
+
+      // Comprobar si este usuario ya vio el tutorial
+      const usuarioId = usuario._id || usuario.id || correo;
+
+      const tutorialVisto = await AsyncStorage.getItem(
+        `tutorialVisto_${usuarioId}`
+      );
+
+      console.log("Sesión iniciada:", usuario.email);
+
+      // Decidir a dónde enviarlo
+      if (tutorialVisto === "true") {
+        router.replace("/home");
+      } else {
+        router.replace("/tutorial");
+      }
 
     } catch (error: any) {
       console.log("ERROR AL INICIAR SESIÓN");
@@ -83,15 +104,28 @@ export default function LoginScreen() {
         editable={!cargando}
       />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Contraseña"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        autoCapitalize="none"
-        editable={!cargando}
-      />
+
+      <View style={styles.passwordContainer}>
+        <TextInput
+          style={styles.passwordInput}
+          placeholder="Contraseña"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={!mostrarPassword}
+          autoCapitalize="none"
+          editable={!cargando}
+        />
+
+        <TouchableOpacity
+          onPress={() => setMostrarPassword(!mostrarPassword)}
+          disabled={cargando}
+        >
+          <Text style={styles.passwordToggle}>
+            {mostrarPassword ? "Ocultar" : "Ver"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
 
       <TouchableOpacity
         style={styles.button}
@@ -174,5 +208,26 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 25,
     color: "#444444",
+  },
+
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#CCCCCC",
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    marginBottom: 15
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 15,
+    fontSize: 16,
+    color: "#111"
+  },
+  passwordToggle: {
+    color: "#333",
+    fontWeight: "bold",
+    paddingLeft: 10
   },
 });

@@ -1,387 +1,314 @@
-import React from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-} from "react-native";
+
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
 import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from "react-native";
+import { api } from "../../data/api";
 
-const mangas: any = {
-  "1": {
-    titulo: "One Piece",
-    genero: "Shonen",
-    tomo: "110",
-    descripcion:
-      "La historia comienza con la ejecución de Gold D. Roger, conocido como el Rey de los Piratas. Antes de morir, Roger anuncia que dejó su tesoro, el One Piece, en un lugar llamado Grand Line. Esto desencadena la gran era de los piratas.",
-  },
+const TENRAI_URL = "https://api.tenrai.org/v1";
 
-  "2": {
-    titulo: "Inuyasha",
-    genero: "Shonen",
-    tomo: "56",
-    descripcion:
-      "Kagome viaja accidentalmente al Japón feudal y conoce a Inuyasha. Juntos deberán enfrentarse a numerosos enemigos mientras buscan los fragmentos de la Perla de Shikon.",
-  },
-
-  "3": {
-    titulo: "Berserk",
-    genero: "Seinen",
-    tomo: "42",
-    descripcion:
-      "La historia sigue a Guts, un guerrero marcado por un pasado lleno de conflictos, mientras lucha por sobrevivir en un mundo dominado por guerras, monstruos y fuerzas sobrenaturales.",
-  },
+type MangaDetalle = {
+  mal_id: number;
+  title?: string;
+  title_english?: string;
+  images?: { jpg?: { image_url?: string } };
+  genres?: { name: string }[];
+  authors?: { name: string }[];
+  volumes?: number | null;
+  status?: string;
+  synopsis?: string;
+  score?: number;
+  published?: { string?: string };
 };
 
-export default function MangaDetailScreen() {
-  const { id } = useLocalSearchParams();
+export default function MangaDetalleScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
 
-  const manga = mangas[String(id)] || mangas["1"];
+  const [manga, setManga] = useState<MangaDetalle | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [numeroTomo, setNumeroTomo] = useState("1");
+  const [precio, setPrecio] = useState("40000");
+
+  async function cargarManga() {
+    try {
+      setCargando(true);
+      const respuesta = await axios.get(`${TENRAI_URL}/manga/${id}/full`);
+      const datos = respuesta.data?.data ?? respuesta.data;
+      setManga(datos);
+    } catch (error) {
+      console.error("Error al cargar manga:", error);
+      Alert.alert("Error", "No se pudo cargar la información del manga.");
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  useEffect(() => {
+    if (id) cargarManga();
+  }, [id]);
+
+  async function agregarTomo(estado: "poseido" | "deseado") {
+    if (!manga) return;
+
+    const tomo = Number(numeroTomo);
+
+    if (!Number.isInteger(tomo) || tomo < 1) {
+      Alert.alert("Tomo inválido", "Escribe un número de tomo válido.");
+      return;
+    }
+
+    if (manga.volumes && tomo > manga.volumes) {
+      Alert.alert(
+        "Número de tomo",
+        `Este manga tiene registrados ${manga.volumes} tomos.`
+      );
+      return;
+    }
+
+    try {
+      setGuardando(true);
+
+      const usuarioTexto = await AsyncStorage.getItem("usuario");
+
+      if (!usuarioTexto) {
+        Alert.alert("Sesión requerida", "Inicia sesión para guardar tomos.");
+        router.replace("/");
+        return;
+      }
+
+      const usuario = JSON.parse(usuarioTexto);
+
+      // Crear o recuperar el registro del manga en nuestra base de datos.
+      const respuestaManga = await api.post("/mangas", {
+        mal_id: Number(manga.mal_id || id),
+        titulo: manga.title || manga.title_english || "Manga sin título",
+        autor: manga.authors?.map((autor) => autor.name).join(", "),
+        total_tomos: manga.volumes || 1,
+        estado_publicacion:
+          manga.status?.toLowerCase().includes("publishing")
+            ? "en_emision"
+            : "finalizada",
+        imagen_url: manga.images?.jpg?.image_url
+      });
+
+      const mangaGuardado = respuestaManga.data;
+
+      // Revisar si el usuario ya tiene registrado ese tomo.
+      const respuestaVolumenes = await api.get(
+        `/usuarios/${usuario._id}/volumenes`
+      );
+
+      const volumenExistente = respuestaVolumenes.data.find(
+        (volumen: any) =>
+          String(volumen.manga_id?._id || volumen.manga_id) ===
+            String(mangaGuardado._id) &&
+          Number(volumen.numero_tomo) === tomo
+      );
+
+      if (volumenExistente) {
+        await api.put(`/volumenes/${volumenExistente._id}`, {
+          estado,
+          precio_estimado:
+            estado === "deseado" && precio.trim() !== ""
+              ? Number(precio)
+              : undefined
+        });
+      } else {
+        const precioNumero = Number(precio);
+
+        await api.post("/volumenes", {
+          usuario_id: usuario._id,
+          manga_id: mangaGuardado._id,
+          numero_tomo: tomo,
+          estado,
+          ...(estado === "deseado" && precio.trim() !== "" &&
+          Number.isFinite(precioNumero) && precioNumero >= 0
+            ? { precio_estimado: precioNumero }
+            : {})
+        });
+      }
+
+      Alert.alert(
+        "Guardado",
+        estado === "poseido"
+          ? "El tomo se agregó a Mi colección."
+          : "El tomo se agregó a tu lista de deseos.",
+        [
+          { text: "Ver mi colección", onPress: () => router.replace("/home") },
+          {
+            text: "Ver deseos",
+            onPress: () => router.replace("/wishlist")
+          },
+          { text: "Seguir aquí", style: "cancel" }
+        ]
+      );
+    } catch (error: any) {
+      console.error(
+        "Error al guardar el tomo:",
+        error.response?.data || error.message
+      );
+      Alert.alert(
+        "No se pudo guardar",
+        error.response?.data?.error ||
+          "Revisa la conexión con el servidor e inténtalo de nuevo."
+      );
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  if (cargando) {
+    return (
+      <View style={styles.centrado}>
+        <ActivityIndicator size="large" color="#111" />
+        <Text style={styles.textoSecundario}>Cargando manga...</Text>
+      </View>
+    );
+  }
+
+  if (!manga) {
+    return (
+      <View style={styles.centrado}>
+        <Text>No se encontró la información del manga.</Text>
+        <TouchableOpacity style={styles.boton} onPress={cargarManga}>
+          <Text style={styles.textoBoton}>Reintentar</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.contenedor}>
+      <TouchableOpacity onPress={() => router.back()}>
+        <Text style={styles.volver}>‹ Volver</Text>
+      </TouchableOpacity>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+      {manga.images?.jpg?.image_url ? (
+        <Image
+          source={{ uri: manga.images.jpg.image_url }}
+          style={styles.portada}
+          resizeMode="contain"
+        />
+      ) : null}
+
+      <Text style={styles.titulo}>
+        {manga.title || manga.title_english || "Manga sin título"}
+      </Text>
+
+      <Text style={styles.dato}>
+        Autor: {manga.authors?.map((autor) => autor.name).join(", ") || "No disponible"}
+      </Text>
+      <Text style={styles.dato}>Estado: {manga.status || "No disponible"}</Text>
+      <Text style={styles.dato}>
+        Tomos registrados: {manga.volumes ?? "No disponible"}
+      </Text>
+      <Text style={styles.dato}>
+        Puntuación: {manga.score ?? "Sin puntuación"}
+      </Text>
+      <Text style={styles.dato}>
+        Géneros: {manga.genres?.map((genero) => genero.name).join(", ") || "No disponibles"}
+      </Text>
+
+      <Text style={styles.subtitulo}>Sinopsis</Text>
+      <Text style={styles.sinopsis}>
+        {manga.synopsis || "No hay una sinopsis disponible."}
+      </Text>
+
+      <Text style={styles.subtitulo}>Agregar un tomo</Text>
+      <Text style={styles.etiqueta}>Número del tomo</Text>
+      <TextInput
+        style={styles.input}
+        value={numeroTomo}
+        onChangeText={setNumeroTomo}
+        keyboardType="number-pad"
+        placeholder="Ej. 1"
+      />
+
+      <Text style={styles.etiqueta}>Precio estimado (solo lista de deseos)</Text>
+      <TextInput
+        style={styles.input}
+        value={precio}
+        onChangeText={setPrecio}
+        keyboardType="numeric"
+        placeholder="Ej. 40000"
+      />
+
+      <TouchableOpacity
+        style={styles.boton}
+        disabled={guardando}
+        onPress={() => agregarTomo("poseido")}
       >
+        <Text style={styles.textoBoton}>
+          {guardando ? "Guardando..." : "Agregar a mi colección"}
+        </Text>
+      </TouchableOpacity>
 
-        {/* HEADER */}
-
-        <View style={styles.header}>
-
-          <TouchableOpacity
-            onPress={() => router.back()}
-          >
-            <Text style={styles.back}>‹</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.headerTitle}>
-            DETALLES
-          </Text>
-
-          <View style={styles.logo}>
-            <Text style={styles.logoText}>M</Text>
-          </View>
-
-        </View>
-
-        {/* PORTADA */}
-
-        <View style={styles.coverContainer}>
-
-          <View style={styles.cover}>
-            <Text style={styles.coverText}>
-              {manga.titulo}
-            </Text>
-          </View>
-
-        </View>
-
-        {/* INFORMACIÓN */}
-
-        <View style={styles.info}>
-
-          <Text style={styles.title}>
-            {manga.titulo}
-          </Text>
-
-          <View style={styles.genre}>
-            <Text style={styles.genreText}>
-              {manga.genero}
-            </Text>
-          </View>
-
-          {/* TOMO */}
-
-          <View style={styles.volumeRow}>
-
-            <Text style={styles.volumeLabel}>
-              Tomo:
-            </Text>
-
-            <View style={styles.volumeBox}>
-              <Text style={styles.volumeText}>
-                {manga.tomo}
-              </Text>
-            </View>
-
-          </View>
-
-          {/* DESCRIPCIÓN */}
-
-          <View style={styles.descriptionBox}>
-
-            <Text style={styles.description}>
-              {manga.descripcion}
-            </Text>
-
-            <Text style={styles.more}>
-              ... ver más
-            </Text>
-
-          </View>
-
-          {/* BOTÓN */}
-
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => router.push("/home")}
-          >
-            <Text style={styles.addButtonText}>
-              Agregar a mi colección!
-            </Text>
-          </TouchableOpacity>
-
-        </View>
-
-      </ScrollView>
-
-      {/* NAVBAR */}
-
-      <View style={styles.bottomNav}>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/search")}
-        >
-          <Text style={styles.navIcon}>
-            ⌂
-          </Text>
-
-          <Text style={styles.navText}>
-            HOME
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/home")}
-        >
-          <Text style={styles.navIcon}>
-            ▮
-          </Text>
-
-          <Text style={styles.navText}>
-            COLLECTION
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/wishlist")}
-        >
-          <Text style={styles.navIcon}>
-            ♡
-          </Text>
-
-          <Text style={styles.navText}>
-            WISHLIST
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push("/profile")}
-        >
-          <Text style={styles.navIcon}>
-            ♙
-          </Text>
-
-          <Text style={styles.navText}>
-            PERFIL
-          </Text>
-        </TouchableOpacity>
-
-      </View>
-
-    </View>
+      <TouchableOpacity
+        style={styles.botonSecundario}
+        disabled={guardando}
+        onPress={() => agregarTomo("deseado")}
+      >
+        <Text style={styles.textoBotonSecundario}>
+          Agregar a lista de deseos
+        </Text>
+      </TouchableOpacity>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-
-  container: {
+  contenedor: { flex: 1, backgroundColor: "#fff", padding: 20 },
+  centrado: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
-
-  content: {
-    paddingBottom: 90,
-  },
-
-  header: {
-    height: 75,
-    paddingHorizontal: 20,
-    paddingTop: 35,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  back: {
-    fontSize: 29,
-    color: "#111111",
-  },
-
-  headerTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#111111",
-  },
-
-  logo: {
-    width: 34,
-    height: 34,
-    borderRadius: 7,
-    backgroundColor: "#111111",
     alignItems: "center",
     justifyContent: "center",
+    padding: 20,
+    backgroundColor: "#fff"
   },
-
-  logoText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-
-  coverContainer: {
-    paddingHorizontal: 20,
-    marginTop: 5,
-  },
-
-  cover: {
-    height: 205,
-    borderRadius: 8,
-    backgroundColor: "#D7D7D7",
+  volver: { fontSize: 17, marginBottom: 20, color: "#111" },
+  portada: { width: 180, height: 250, alignSelf: "center", marginBottom: 20 },
+  titulo: { fontSize: 25, fontWeight: "bold", marginBottom: 12, color: "#111" },
+  dato: { fontSize: 14, color: "#444", marginBottom: 7 },
+  subtitulo: { fontSize: 19, fontWeight: "bold", marginTop: 22, marginBottom: 10 },
+  sinopsis: { fontSize: 15, lineHeight: 22, color: "#333" },
+  etiqueta: { fontSize: 14, marginTop: 10, marginBottom: 6 },
+  input: {
     borderWidth: 1,
-    borderColor: "#BBBBBB",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  coverText: {
-    fontSize: 30,
-    fontWeight: "900",
-    color: "#333333",
-    textAlign: "center",
-  },
-
-  info: {
-    paddingHorizontal: 20,
-    marginTop: 10,
-  },
-
-  title: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#111111",
-  },
-
-  genre: {
-    alignSelf: "flex-start",
-    backgroundColor: "#E5E5E5",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginTop: 7,
-  },
-
-  genreText: {
-    fontSize: 10,
-    color: "#555555",
-  },
-
-  volumeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 12,
-  },
-
-  volumeLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    marginRight: 8,
-  },
-
-  volumeBox: {
-    width: 55,
-    height: 28,
-    borderWidth: 1,
-    borderColor: "#BBBBBB",
-    borderRadius: 5,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  volumeText: {
-    fontSize: 11,
-  },
-
-  descriptionBox: {
-    borderWidth: 1,
-    borderColor: "#AAAAAA",
+    borderColor: "#ccc",
     borderRadius: 8,
     padding: 12,
-    marginTop: 12,
+    marginBottom: 10,
+    color: "#111"
   },
-
-  description: {
-    fontSize: 11,
-    lineHeight: 17,
-    color: "#333333",
-  },
-
-  more: {
-    fontSize: 10,
-    color: "#555555",
-    textAlign: "right",
-    marginTop: 4,
-  },
-
-  addButton: {
-    height: 40,
-    backgroundColor: "#111111",
-    borderRadius: 6,
+  boton: {
+    backgroundColor: "#111",
+    borderRadius: 8,
+    padding: 14,
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 12,
+    marginTop: 12
   },
-
-  addButtonText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-
-  bottomNav: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 68,
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderTopColor: "#EEEEEE",
-    flexDirection: "row",
-    justifyContent: "space-around",
+  textoBoton: { color: "#fff", fontWeight: "bold" },
+  botonSecundario: {
+    borderWidth: 1,
+    borderColor: "#111",
+    borderRadius: 8,
+    padding: 14,
     alignItems: "center",
+    marginTop: 10,
+    marginBottom: 30
   },
-
-  navItem: {
-    alignItems: "center",
-  },
-
-  navIcon: {
-    fontSize: 17,
-    color: "#AAAAAA",
-  },
-
-  navText: {
-    fontSize: 8,
-    color: "#999999",
-    marginTop: 3,
-  },
-
+  textoBotonSecundario: { color: "#111", fontWeight: "bold" },
+  textoSecundario: { marginTop: 10, color: "#555" }
 });

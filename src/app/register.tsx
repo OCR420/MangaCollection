@@ -17,6 +17,8 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState(""); // Opcional, para validar
   const [cargando, setCargando] = useState(false);
+  const [mostrarPassword, setMostrarPassword] = useState(false);
+  const [mostrarConfirmacion, setMostrarConfirmacion] = useState(false);
 
   // 2. La función principal fuera del renderizado
 
@@ -95,21 +97,45 @@ export default function RegisterScreen() {
         onChangeText={setEmail}
       />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Contraseña"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Confirmar contraseña"
-        secureTextEntry
-        value={confirmPassword}
-        onChangeText={setConfirmPassword}
-      />
+      <View style={styles.passwordContainer}>
+        <TextInput
+          style={styles.passwordInput}
+          placeholder="Contraseña"
+          secureTextEntry={!mostrarPassword}
+          value={password}
+          onChangeText={setPassword}
+        />
+
+        <TouchableOpacity
+          onPress={() => setMostrarPassword(!mostrarPassword)}
+        >
+          <Text style={styles.passwordToggle}>
+            {mostrarPassword ? "Ocultar" : "Ver"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+
+
+      <View style={styles.passwordContainer}>
+        <TextInput
+          style={styles.passwordInput}
+          placeholder="Confirmar contraseña"
+          secureTextEntry={!mostrarConfirmacion}
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+        />
+
+        <TouchableOpacity
+          onPress={() => setMostrarConfirmacion(!mostrarConfirmacion)}
+        >
+          <Text style={styles.passwordToggle}>
+            {mostrarConfirmacion ? "Ocultar" : "Ver"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
 
       <TouchableOpacity
         style={styles.button}
@@ -180,5 +206,26 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 25,
     color: "#444444",
+  },
+
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#CCCCCC",
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    marginBottom: 15
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 15,
+    fontSize: 16,
+    color: "#111"
+  },
+  passwordToggle: {
+    color: "#333",
+    fontWeight: "bold",
+    paddingLeft: 10
   },
 });
